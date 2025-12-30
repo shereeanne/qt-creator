@@ -186,7 +186,7 @@ int minimumSDK(const BuildConfiguration *bc)
     if (!element)
         return minimumSDK(bc->kit());
 
-    // const int minSdkVersion = parseMinSdk(*element);
+    const int minSdkVersion = parseMinSdk(*element);
     if (minSdkVersion == 0) {
         QtSupport::QtVersion *version = QtSupport::QtKitAspect::qtVersion(bc->kit());
         if (version && version->isAndroidQtVersion())
