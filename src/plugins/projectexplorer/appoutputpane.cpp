@@ -48,8 +48,10 @@
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QLoggingCategory>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QSpinBox>
@@ -436,6 +438,8 @@ AppOutputPane::AppOutputPane() :
     m_stopButton(new QToolButton),
     m_attachButton(new QToolButton),
     m_settingsButton(new QToolButton),
+    m_applicationOutputCheckBox(new QCheckBox),
+    m_filterWidget(new QWidget),
     m_formatterWidget(new QWidget),
     m_handler(new ShowOutputTaskHandler(this,
         Tr::tr("Show &App Output"),
@@ -489,11 +493,21 @@ AppOutputPane::AppOutputPane() :
         Core::ICore::showOptionsDialog(OPTIONS_PAGE_ID);
     });
 
+    m_applicationOutputCheckBox->setText(Tr::tr("Application Output"));
+    m_applicationOutputCheckBox->setToolTip(Tr::tr("Toggle between system output and application output"));
+
+    connect(m_applicationOutputCheckBox, &QCheckBox::stateChanged, this, [this] {
+        updateAllRunControlFilters();
+    });
+
+    auto filterLayout = new QHBoxLayout(m_filterWidget);
+    filterLayout->setContentsMargins(20, 0, 0, 0);
+    filterLayout->setSpacing(10);
+    filterLayout->addWidget(m_applicationOutputCheckBox);
+
     auto formatterWidgetsLayout = new QHBoxLayout;
     formatterWidgetsLayout->setContentsMargins(QMargins());
     m_formatterWidget->setLayout(formatterWidgetsLayout);
-
-    // Spacer (?)
 
     m_tabWidget->setDocumentMode(true);
     m_tabWidget->setTabsClosable(true);
@@ -598,7 +612,7 @@ QWidget *AppOutputPane::outputWidget(QWidget *)
 QList<QWidget *> AppOutputPane::toolBarWidgets() const
 {
     return QList<QWidget *>{m_reRunButton, m_stopButton, m_attachButton, m_settingsButton,
-                m_formatterWidget} + IOutputPane::toolBarWidgets();
+                m_formatterWidget} + IOutputPane::toolBarWidgets() + QList<QWidget *>{m_filterWidget};
 }
 
 void AppOutputPane::clearContents()
@@ -992,6 +1006,24 @@ void AppOutputPane::prepareRunControlStart(RunControl *runControl)
                 ? settings().debugOutputMode
                 : AppOutputPaneMode::FlashOnOutput;
     setBehaviorOnOutput(runControl, popupMode);
+
+    QVariantHash extraData = runControl->extraData();
+    extraData.insert("Android.LogcatFilterPid", m_applicationOutputCheckBox->isChecked());
+    runControl->setExtraData(extraData);
+}
+
+void AppOutputPane::updateAllRunControlFilters()
+{
+    const bool filterByPid = m_applicationOutputCheckBox->isChecked();
+
+    // Update extraData
+    for (const RunControlTab &tab : std::as_const(m_runControlTabs)) {
+        if (tab.runControl && tab.runControl->isRunning()) {
+            QVariantHash extraData = tab.runControl->extraData();
+            extraData.insert("Android.LogcatFilterPid", filterByPid);
+            tab.runControl->setExtraData(extraData);
+        }
+    }
 }
 
 void AppOutputPane::showOutputPaneForRunControl(RunControl *runControl)

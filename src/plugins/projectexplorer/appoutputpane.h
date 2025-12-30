@@ -16,6 +16,7 @@ QT_BEGIN_NAMESPACE
 class QToolButton;
 class QAction;
 class QPoint;
+class QCheckBox;
 QT_END_NAMESPACE
 
 namespace Core { class OutputWindow; }
@@ -63,6 +64,7 @@ public:
 
     void prepareRunControlStart(RunControl *runControl);
     void showOutputPaneForRunControl(RunControl *runControl);
+    void updateAllRunControlFilters();
 
     void closeTabsWithoutPrompt();
 
@@ -151,6 +153,8 @@ private:
     QToolButton *m_stopButton;
     QToolButton *m_attachButton;
     QToolButton * const m_settingsButton;
+    QCheckBox *m_applicationOutputCheckBox;
+    QWidget *m_filterWidget;
     QWidget *m_formatterWidget;
     ShowOutputTaskHandler * const m_handler;
     AppOutputSettings m_settings;

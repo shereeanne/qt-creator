@@ -161,6 +161,9 @@ public:
     Utils::Environment m_extraEnvVars;
     Utils::FilePath m_debugServerPath; // On build device, typically as part of ndk
     bool m_useAppParamsForQmlDebugger = false;
+    bool m_filterLogcatByPid = false;
+    bool m_filterLogcatByPackage = true;
+    QStringList m_logCatFilterList;
 };
 
 static void setupStorage(RunnerStorage *storage, RunnerInterface *glue)
@@ -213,12 +216,19 @@ static void setupStorage(RunnerStorage *storage, RunnerInterface *glue)
     }
 
     storage->m_debugServerPath = debugServer(bc);
+
+    const QVariantHash extraData = runControl->extraData();
+    storage->m_filterLogcatByPid = extraData.value("Android.LogcatFilterPid", true).toBool();
+    storage->m_logCatFilterList = extraData.value("Android.LogcatPackageFilterList").toStringList();
+
     qCDebug(androidRunWorkerLog).noquote() << "Device Serial:" << glue->deviceSerialNumber()
                                            << ", API level:" << glue->apiLevel()
                                            << ", Extra Start Args:" << storage->m_amStartExtraArgs
                                            << ", Before Start ADB cmds:" << storage->m_beforeStartAdbCommands
                                            << ", After finish ADB cmds:" << storage->m_afterFinishAdbCommands
-                                           << ", Debug server path:" << storage->m_debugServerPath;
+                                           << ", Debug server path:" << storage->m_debugServerPath
+                                           << ", Filter logcat by PID:" << storage->m_filterLogcatByPid
+                                           << ", Package filter list:" << storage->m_logCatFilterList;
 
     QtSupport::QtVersion *version = QtSupport::QtKitAspect::qtVersion(bc->kit());
     storage->m_useAppParamsForQmlDebugger = version->qtVersion() >= QVersionNumber(5, 12);
@@ -393,8 +403,27 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                 // Get type excluding the initial color characters
                 const QString msgType = line.mid(5, 2);
                 const bool isFatal = msgType == "F/";
-                if (!line.contains(pidString) && !isFatal)
-                    continue;
+
+                const QVariantHash extraData = storagePtr->m_glue->runControl()->extraData();
+                const bool filterByPid = extraData.value("Android.LogcatFilterPid", true).toBool();
+                const QStringList filterList = extraData.value("Android.LogcatPackageFilterList").toStringList();
+
+                if (filterByPid) {
+                    if (!line.contains(pidString) && !isFatal)
+                        continue;
+                } else {
+                    if (!filterList.isEmpty() && !isFatal) {
+                        int tagStart = line.indexOf('/') + 1;
+                        int tagEnd = line.indexOf('(', tagStart);
+                        if (tagStart > 0 && tagEnd > tagStart) {
+                            QString tag = line.mid(tagStart, tagEnd - tagStart).trimmed();
+                            if (!filterList.contains(tag)) {
+                                qDebug() << "Filtering by package:" << tag << "not in list";
+                                continue;
+                            }
+                        }
+                    }
+                }
 
                 if (storagePtr->m_useCppDebugger) {
                     if (start->current() == 0 && msg.indexOf("Sending WAIT chunk") > 0)
@@ -423,11 +452,16 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                     const QString output = QString(line).remove(pidMatch);
                     if (isFatal) {
                         emit storagePtr->appendStdErr(output);
-                    } else if (cleanPidMatch == pidString) {
-                        if (onlyError || errorMsgTypes.contains(msgType))
-                            emit storagePtr->appendStdErr(output);
-                        else
-                            emit storagePtr->appendStdOut(output);
+                    } else {
+                        const QVariantHash extraData = storagePtr->m_glue->runControl()->extraData();
+                        const bool filterByPid = extraData.value("Android.LogcatFilterPid", true).toBool();
+
+                        if (!filterByPid || cleanPidMatch == pidString) {
+                            if (onlyError || errorMsgTypes.contains(msgType))
+                                emit storagePtr->appendStdErr(output);
+                            else
+                                emit storagePtr->appendStdOut(output);
+                        }
                     }
                 } else {
                     if (onlyError || errorMsgTypes.contains(msgType))
