@@ -98,6 +98,8 @@ private:
 
     void enableButtons(const RunControl *rc);
 
+    void setupAppSpecificFilter();
+
     class RunControlTab {
     public:
         explicit RunControlTab(RunControl *runControl = nullptr,
@@ -133,6 +135,7 @@ private:
     bool canNavigate() const final;
 
     bool hasFilterContext() const final;
+    bool supportsLogQueryMode() const final;
 
     void updateFilter() final;
     const QList<Core::OutputWindow *> outputWindows() const final;

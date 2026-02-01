@@ -30,6 +30,7 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QCompleter>
 #include <QDebug>
 #include <QFocusEvent>
 #include <QLabel>
@@ -440,6 +441,7 @@ void IOutputPane::setWheelZoomEnabled(bool enabled)
 void IOutputPane::setupFilterUi(const Key &historyKey, const QString &actionSuffix)
 {
     m_filterActionSuffix = actionSuffix;
+    m_filterHistoryKey = historyKey;
 
     ActionBuilder filterRegexpAction(this, filterRegexpActionId());
     filterRegexpAction.setText(Tr::tr("Use Regular Expressions"));
@@ -482,6 +484,18 @@ void IOutputPane::setupFilterUi(const Key &historyKey, const QString &actionSuff
         const std::optional<NumericOption> option = NumericOption::get(action);
         QTC_ASSERT(option, return);
         m_afterContext = option->currentValue;
+        updateFilter();
+    });
+
+    ActionBuilder logQueryModeAction(this, filterLogQueryModeActionId());
+    logQueryModeAction.setText(Tr::tr("Use as Log Query"));
+    logQueryModeAction.setCheckable(true);
+    m_filterActionLogQueryMode = logQueryModeAction.contextAction();
+    logQueryModeAction.addOnToggled(this, [this] {
+        m_useLogQuery = m_filterActionLogQueryMode->isChecked();
+        if (m_useLogQuery && m_filterOutputLineEdit && m_filterOutputLineEdit->text().isEmpty())
+            m_filterOutputLineEdit->setText(Tr::tr("Package:mine"));
+        updatePlaceholder();
         updateFilter();
     });
 
@@ -539,6 +553,11 @@ void IOutputPane::setZoomButtonsEnabled(bool enabled)
     m_zoomOutButton->setEnabled(enabled);
 }
 
+void IOutputPane::addFilterAction(const Utils::Id &actionId)
+{
+    m_additionalFilterActions.append(actionId);
+}
+
 void IOutputPane::updateFilter()
 {
     QTC_ASSERT(false, qDebug() << "updateFilter() needs to get re-implemented");
@@ -549,6 +568,9 @@ void IOutputPane::filterOutputButtonClicked()
     QVector<Utils::Id> commands = {filterRegexpActionId(),
                                    filterCaseSensitivityActionId(),
                                    filterInvertedActionId()};
+
+    for (const Utils::Id &id : m_additionalFilterActions)
+        commands.emplaceBack(id);
 
     if (hasFilterContext()) {
         commands.emplaceBack(filterBeforeActionId());
@@ -588,6 +610,26 @@ Id IOutputPane::filterBeforeActionId() const
 Id IOutputPane::filterAfterActionId() const
 {
     return Id("OutputFilter.AfterContext").withSuffix(m_filterActionSuffix);
+}
+
+Id IOutputPane::filterLogQueryModeActionId() const
+{
+    return Id("OutputFilter.LogQueryMode").withSuffix(m_filterActionSuffix);
+}
+
+void IOutputPane::updatePlaceholder()
+{
+    if (!m_filterOutputLineEdit)
+        return;
+    if (m_useLogQuery) {
+        m_filterOutputLineEdit->setPlaceholderText(Tr::tr("Log query..."));
+        auto completer = new QCompleter({"Level:", "Package:", "Package:mine", "PID:", "PID:mine", "Tag:"}, m_filterOutputLineEdit);
+        completer->setCaseSensitivity(Qt::CaseInsensitive);
+        m_filterOutputLineEdit->setSpecialCompleter(completer);
+    } else {
+        m_filterOutputLineEdit->setPlaceholderText(Tr::tr("Filter output..."));
+        m_filterOutputLineEdit->setSpecialCompleter(nullptr);
+    }
 }
 
 void IOutputPane::setCaseSensitive(bool caseSensitive)

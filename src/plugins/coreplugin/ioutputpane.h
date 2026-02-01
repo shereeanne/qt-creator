@@ -85,11 +85,16 @@ protected:
     int beforeContext() const { return m_beforeContext; }
     int afterContext() const { return m_afterContext; }
     Qt::CaseSensitivity filterCaseSensitivity() const { return m_filterCaseSensitivity; }
+    bool useLogQuery() const { return m_useLogQuery; }
+    virtual bool supportsLogQueryMode() const { return false; }
     void setFilteringEnabled(bool enable);
     QWidget *filterWidget() const { return m_filterOutputLineEdit; }
     void setupContext(const Utils::Id &context, QWidget *widget);
     void setupContext(const Context &context, QWidget *widget);
     void setZoomButtonsEnabled(bool enabled);
+    void addFilterAction(const Utils::Id &actionId);
+
+    Utils::Id filterLogQueryModeActionId() const;
 
 private:
     virtual void updateFilter();
@@ -102,6 +107,7 @@ private:
     Utils::Id filterInvertedActionId() const;
     Utils::Id filterBeforeActionId() const;
     Utils::Id filterAfterActionId() const;
+    void updatePlaceholder();
 
     Utils::Id m_id;
     QString m_displayName;
@@ -115,9 +121,13 @@ private:
     Utils::FancyLineEdit *m_filterOutputLineEdit = nullptr;
     bool m_filterRegexp = false;
     bool m_invertFilter = false;
+    bool m_useLogQuery = false;
     int m_beforeContext = 0;
     int m_afterContext = 0;
     Qt::CaseSensitivity m_filterCaseSensitivity = Qt::CaseInsensitive;
+    QVector<Utils::Id> m_additionalFilterActions;
+    QAction *m_filterActionLogQueryMode = nullptr;
+    Utils::Key m_filterHistoryKey;
 };
 
 } // namespace Core
