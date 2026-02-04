@@ -3,6 +3,7 @@
 
 #include "appoutputpane.h"
 
+#include "devicesupport/idevice.h"
 #include "project.h"
 #include "projectexplorer.h"
 #include "projectexplorerconstants.h"
@@ -39,6 +40,8 @@
 #include <utils/storekey.h>
 #include <utils/stylehelper.h>
 #include <utils/utilsicons.h>
+
+#include <algorithm>
 
 #include <QAbstractListModel>
 #include <QAction>
@@ -92,6 +95,33 @@ static QString msgAttachDebuggerTooltip(const QString &handleDescription = QStri
     return handleDescription.isEmpty() ?
            Tr::tr("Attach debugger to this process") :
            Tr::tr("Attach debugger to %1").arg(handleDescription);
+}
+
+static int logLevelFromString(QStringView str)
+{
+    if (str.size() == 1) {
+        switch (str.at(0).toUpper().toLatin1()) {
+        case 'D': return 1;
+        case 'I': return 2;
+        case 'W': return 3;
+        case 'E': return 4;
+        case 'C': return 4;
+        case 'F': return 5;
+        }
+        return 0;
+    }
+    if (str.compare(QLatin1String("Debug"), Qt::CaseInsensitive) == 0)
+        return 1;
+    if (str.compare(QLatin1String("Info"), Qt::CaseInsensitive) == 0)
+        return 2;
+    if (str.compare(QLatin1String("Warning"), Qt::CaseInsensitive) == 0)
+        return 3;
+    if (str.compare(QLatin1String("Error"), Qt::CaseInsensitive) == 0
+        || str.compare(QLatin1String("Critical"), Qt::CaseInsensitive) == 0)
+        return 4;
+    if (str.compare(QLatin1String("Fatal"), Qt::CaseInsensitive) == 0)
+        return 5;
+    return 0;
 }
 
 static inline QString messageTypeToString(QtMsgType type)
@@ -172,47 +202,293 @@ public:
 
     LoggingCategoryRegistry *registry() { return &m_registry; }
 
+    void setAppPid(const QString &pid) { m_appPid = pid; }
+    void setAppPackage(const QString &pkg) { m_appPackage = pkg; }
+
+
+    void setFilterQuery(const QString &query)
+    {
+        m_filterQuery = query;
+        m_queryTags.clear();
+        m_queryPackages.clear();
+        m_queryPids.clear();
+        m_queryLogLevels.clear();
+        m_queryKeywords.clear();
+        m_filterBySelfPid = false;
+        m_filterBySelfPackage = false;
+
+        if (query.isEmpty())
+            return;
+
+        const QStringList parts = parseQueryWithQuotes(query);
+        qCDebug(appOutputLog) << "Parsed query parts:" << parts;
+
+        for (const QString &part : parts) {
+            if (part.startsWith(QLatin1String("Tag:"), Qt::CaseInsensitive)) {
+                m_queryTags.insert(part.mid(4));
+            } else if (part.compare(QLatin1String("Package:mine"), Qt::CaseInsensitive) == 0) {
+                m_filterBySelfPackage = true;
+            } else if (part.startsWith(QLatin1String("Package:"), Qt::CaseInsensitive)) {
+                m_queryPackages.insert(part.mid(8));
+            } else if (part.compare(QLatin1String("PID:mine"), Qt::CaseInsensitive) == 0) {
+                m_filterBySelfPid = true;
+            } else if (part.startsWith(QLatin1String("PID:"), Qt::CaseInsensitive)) {
+                m_queryPids.insert(part.mid(4));
+            } else if (part.startsWith(QLatin1String("Level:"), Qt::CaseInsensitive)) {
+                const int level = logLevelFromString(part.mid(6));
+                if (level > 0)
+                    m_queryLogLevels.insert(level);
+            } else {
+                m_queryKeywords.insert(part);
+            }
+        }
+    }
+
+    void invalidateFilter()
+    {
+        resetLastFilteredBlockNumber();
+        filterNewContent();
+    }
+
 private:
+
+    QStringList parseQueryWithQuotes(const QString &query)
+    {
+        QStringList queryParts;
+        const QRegularExpression quotedOrCommaDelimited(R"('([^']*)'|([^,]+))");
+        QRegularExpressionMatchIterator matches = quotedOrCommaDelimited.globalMatch(query);
+
+        while (matches.hasNext()) {
+            const QRegularExpressionMatch match = matches.next();
+            const QString quotedContent = match.captured(1);
+            const QString unquotedContent = match.captured(2);
+            const QString part = (quotedContent.isEmpty() ? unquotedContent : quotedContent).trimmed();
+            if (!part.isEmpty())
+                queryParts.append(part);
+        }
+        return queryParts;
+    }
+
+    struct LogcatLine {
+        QStringView tag;
+        QStringView pid;
+        int logLevel = 0;  // 0=unknown, 1=D, 2=I, 3=W, 4=E, 5=F
+        bool parsed = false;
+    };
+
+    static LogcatLine parseLogcatLine(const QString &text)
+    {
+        LogcatLine result;
+        const int len = text.length();
+        if (len < 3)
+            return result;
+
+        int slashPos = -1;
+        for (int i = 0; i < len - 1 && i < 20; ++i) {
+            if (text.at(i + 1) == QLatin1Char('/')) {
+                const char c = text.at(i).toLatin1();
+                switch (c) {
+                case 'D': result.logLevel = 1; slashPos = i + 1; break;
+                case 'I': result.logLevel = 2; slashPos = i + 1; break;
+                case 'W': result.logLevel = 3; slashPos = i + 1; break;
+                case 'E': result.logLevel = 4; slashPos = i + 1; break;
+                case 'F': result.logLevel = 5; slashPos = i + 1; break;
+                default: continue;
+                }
+                break;
+            }
+        }
+
+        if (slashPos < 0)
+            return result;
+
+        int tagStart = slashPos + 1;
+        int tagEnd = -1;
+        int pidStart = -1;
+        int pidEnd = -1;
+
+        for (int i = tagStart; i < len; ++i) {
+            const QChar c = text.at(i);
+            if (c == QLatin1Char('(')) {
+                tagEnd = i;
+                pidStart = i + 1;
+                for (int j = pidStart; j < len - 1; ++j) {
+                    if (text.at(j) == QLatin1Char(')') && text.at(j + 1) == QLatin1Char(':')) {
+                        pidEnd = j;
+                        break;
+                    }
+                }
+                break;
+            } else if (c == QLatin1Char(':')) {
+                tagEnd = i;
+                break;
+            }
+        }
+
+        if (tagEnd > tagStart) {
+            while (tagStart < tagEnd && text.at(tagStart).isSpace())
+                ++tagStart;
+            while (tagEnd > tagStart && text.at(tagEnd - 1).isSpace())
+                --tagEnd;
+            result.tag = QStringView(text).mid(tagStart, tagEnd - tagStart);
+        }
+
+        if (pidStart >= 0 && pidEnd > pidStart) {
+            while (pidStart < pidEnd && text.at(pidStart).isSpace())
+                ++pidStart;
+            while (pidEnd > pidStart && text.at(pidEnd - 1).isSpace())
+                --pidEnd;
+            result.pid = QStringView(text).mid(pidStart, pidEnd - pidStart);
+        }
+
+        result.parsed = true;
+        return result;
+    }
+
     TextMatchingFunction makeMatchingFilterFunction() const override
     {
         auto parentFilter = OutputWindow::makeMatchingFilterFunction();
 
-        auto filter = [categories = m_categories](const QString &text) {
-            if (categories.isEmpty())
-                return true;
+        const auto categories = m_categories;
+        const QString appPid = m_appPid;
+        const bool filterBySelfPid = m_filterBySelfPid;
+        const bool filterBySelfPackage = m_filterBySelfPackage;
 
-            for (auto i = categories.cbegin(), end = categories.cend(); i != end; ++i) {
-                if (!text.contains(i.key()))
-                    continue;
-                QLoggingCategory * const cat = i.value();
-                if (text.contains("[F]"))
-                    return true;
-                if (text.contains("[D]") && !cat->isDebugEnabled())
-                    return false;
-                if (text.contains("[W]") && !cat->isWarningEnabled())
-                    return false;
-                if (text.contains("[C]") && !cat->isCriticalEnabled())
-                    return false;
-                if (text.contains("[I]") && !cat->isInfoEnabled())
-                    return false;
-                return true;
+        const QSet<QString> queryTags = m_queryTags;
+        const QSet<QString> queryPackages = m_queryPackages;
+        const QSet<int> queryLogLevels = m_queryLogLevels;
+        const QSet<QString> queryKeywords = m_queryKeywords;
+
+        QSet<QString> allPids = m_queryPids;
+        if ((filterBySelfPid || filterBySelfPackage) && !appPid.isEmpty())
+            allPids.insert(appPid);
+
+        const bool needsPid = !allPids.isEmpty();
+        const bool needsTag = !queryTags.isEmpty();
+        const bool needsPackage = !queryPackages.isEmpty();
+        const bool needsLogLevel = !queryLogLevels.isEmpty();
+        const bool needsKeywords = !queryKeywords.isEmpty();
+        const bool needsParsing = needsPid || needsTag || needsPackage || needsLogLevel;
+        const bool hasCategories = !categories.isEmpty();
+
+        return [=](const QString &text) {
+            LogcatLine line;
+            if (needsParsing)
+                line = parseLogcatLine(text);
+
+            if (needsPid && !allPids.contains(line.pid.toString())) {
+                return false;
             }
-            return true;
-        };
 
-        return [filter, parentFilter](const QString &text) {
-            return filter(text) && parentFilter(text);
+            if (needsTag) {
+                bool found = false;
+                for (const QString &tag : queryTags) {
+                    if (line.tag.contains(tag, Qt::CaseInsensitive)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    return false;
+            }
+
+            if (needsPackage) {
+                bool found = false;
+                for (const QString &pkg : queryPackages) {
+                    if (line.tag.contains(pkg, Qt::CaseInsensitive)
+                        || text.contains(pkg, Qt::CaseInsensitive)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    return false;
+            }
+
+            if (needsLogLevel) {
+                int level = line.logLevel;
+                if (level == 0) {
+                    // Fall back to [D]/[I]/[W]/[C]/[F] markers for non-logcat output
+                    static const QHash<QString, int> logMarkers = {
+                        {QLatin1String("[D]"), 1}, {QLatin1String("[I]"), 2},
+                        {QLatin1String("[W]"), 3}, {QLatin1String("[C]"), 4},
+                        {QLatin1String("[F]"), 5}
+                    };
+                    for (auto it = logMarkers.cbegin(); it != logMarkers.cend(); ++it) {
+                        if (text.contains(it.key())) {
+                            level = it.value();
+                            break;
+                        }
+                    }
+                }
+                if (level > 0 && !queryLogLevels.contains(level))
+                    return false;
+            }
+
+            if (needsKeywords) {
+                bool found = false;
+                for (const QString &keyword : queryKeywords) {
+                    if (text.contains(keyword, Qt::CaseInsensitive)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    return false;
+            }
+
+            if (hasCategories) {
+                for (auto i = categories.cbegin(), end = categories.cend(); i != end; ++i) {
+                    if (!text.contains(i.key()))
+                        continue;
+                    QLoggingCategory * const cat = i.value();
+                    if (text.contains(QLatin1String("[F]")))
+                        break;  // Fatal always passes
+                    if (text.contains(QLatin1String("[D]")) && !cat->isDebugEnabled())
+                        return false;
+                    if (text.contains(QLatin1String("[W]")) && !cat->isWarningEnabled())
+                        return false;
+                    if (text.contains(QLatin1String("[C]")) && !cat->isCriticalEnabled())
+                        return false;
+                    if (text.contains(QLatin1String("[I]")) && !cat->isInfoEnabled())
+                        return false;
+                    break;
+                }
+            }
+
+            return parentFilter(text);
         };
     }
 
     bool shouldFilterNewContentOnBlockCountChanged() const override
     {
-        return m_filterEnabled || OutputWindow::shouldFilterNewContentOnBlockCountChanged();
+        const bool hasCustomFilter = m_filterBySelfPid
+            || m_filterBySelfPackage
+            || !m_queryTags.isEmpty()
+            || !m_queryPackages.isEmpty()
+            || !m_queryPids.isEmpty()
+            || !m_queryLogLevels.isEmpty();
+
+        return m_filterEnabled
+            || hasCustomFilter
+            || OutputWindow::shouldFilterNewContentOnBlockCountChanged();
     }
 
     LoggingCategoryRegistry m_registry{this};
     QMap<QString, QLoggingCategory *> m_categories;
     bool m_filterEnabled = false;
+
+    QString m_appPid;
+    QString m_appPackage;
+    bool m_filterBySelfPid = false;
+    bool m_filterBySelfPackage = false;
+    QString m_filterQuery;
+
+    QSet<QString> m_queryTags;
+    QSet<QString> m_queryPackages;
+    QSet<QString> m_queryPids;
+    QSet<int> m_queryLogLevels;
+    QSet<QString> m_queryKeywords;
 };
 
 class TabWidget : public QTabWidget
@@ -426,6 +702,12 @@ AppOutputPane::RunControlTab::RunControlTab(RunControl *runControl, Core::Output
     }
 }
 
+void AppOutputPane::setupAppSpecificFilter()
+{
+    // Add log query mode toggle (reuses the main filter text box for Tag:, Package:, PID: queries)
+    addFilterAction(filterLogQueryModeActionId());
+}
+
 AppOutputPane::AppOutputPane() :
     m_tabWidget(new TabWidget),
     m_stopAction(new QAction(Tr::tr("Stop"), this)),
@@ -476,9 +758,7 @@ AppOutputPane::AppOutputPane() :
     m_attachButton->setEnabled(false);
     m_attachButton->setIcon(Icons::DEBUG_START_SMALL_TOOLBAR.icon());
 
-    connect(m_attachButton, &QToolButton::clicked,
-            this, &AppOutputPane::attachToRunControl);
-
+    connect(m_attachButton, &QToolButton::clicked, this, &AppOutputPane::attachToRunControl);
     connect(this, &IOutputPane::zoomInRequested, this, &AppOutputPane::zoomIn);
     connect(this, &IOutputPane::zoomOutRequested, this, &AppOutputPane::zoomOut);
     connect(this, &IOutputPane::resetZoomRequested, this, &AppOutputPane::resetZoom);
@@ -512,6 +792,8 @@ AppOutputPane::AppOutputPane() :
             this, &AppOutputPane::projectRemoved);
 
     setupFilterUi("AppOutputPane.Filter", "ProjectExplorer::Internal::AppOutputPane");
+    setupAppSpecificFilter();
+
     setFilteringEnabled(false);
     setZoomButtonsEnabled(false);
     setupContext("Core.AppOutputPane", m_tabWidget);
@@ -627,21 +909,43 @@ void AppOutputPane::setFocus()
         m_tabWidget->currentWidget()->setFocus();
 }
 
+void AppOutputPane::updateFilterForTab(RunControlTab *tab)
+{
+    if (!tab)
+        return;
+
+    auto appwindow = qobject_cast<AppOutputWindow*>(tab->window);
+    appwindow->updateCategoriesProperties(appwindow->registry()->categories());
+
+    if (tab->runControl) {
+        const qint64 pid = tab->runControl->attachPid().pid();
+        if (pid > 0)
+            appwindow->setAppPid(QString::number(pid));
+
+        const auto *pkgAspect = tab->runControl->aspectData<AppPackageAspect>();
+        if (pkgAspect && !pkgAspect->value.isEmpty())
+            appwindow->setAppPackage(pkgAspect->value);
+        else
+            appwindow->setAppPackage(tab->runControl->displayName());
+    }
+
+    if (useLogQuery()) {
+        appwindow->setFilterQuery(filterText());
+        tab->window->updateFilterProperties(
+            QString(), filterCaseSensitivity(), false, filterIsInverted(), beforeContext(),
+            afterContext());
+    } else {
+        appwindow->setFilterQuery(QString());
+        tab->window->updateFilterProperties(filterText(), filterCaseSensitivity(),
+                                            filterUsesRegexp(), filterIsInverted(),
+                                            beforeContext(), afterContext());
+    }
+    appwindow->invalidateFilter();
+}
+
 void AppOutputPane::updateFilter()
 {
-    if (RunControlTab * const tab = currentTab()) {
-        auto appwindow = qobject_cast<AppOutputWindow*>(tab->window);
-        appwindow->updateCategoriesProperties(appwindow->registry()->categories());
-        if (!tab->window->updateFilterProperties(
-                filterText(),
-                filterCaseSensitivity(),
-                filterUsesRegexp(),
-                filterIsInverted(),
-                beforeContext(),
-                afterContext())) {
-            tab->window->filterNewContent();
-        }
-    }
+    updateFilterForTab(currentTab());
 }
 
 const QList<Core::OutputWindow *> AppOutputPane::outputWindows() const
@@ -671,6 +975,7 @@ void AppOutputPane::createNewOutputWindow(RunControl *rc)
 
     connect(rc, &RunControl::aboutToStart, this, runControlChanged);
     connect(rc, &RunControl::started, this, runControlChanged);
+    connect(rc, &RunControl::started, this, &AppOutputPane::updateFilter);
     connect(rc, &RunControl::stopped, this, [this, rc] {
         QTimer::singleShot(0, this, [this, rc] { runControlFinished(rc); });
         for (const RunControlTab &t : std::as_const(m_runControlTabs)) {
@@ -1229,12 +1534,7 @@ void AppOutputPane::tabChanged(int i)
 {
     RunControlTab * const controlTab = tabFor(m_tabWidget->widget(i));
     if (i != -1 && controlTab) {
-        auto appwindow = qobject_cast<AppOutputWindow*>(controlTab->window);
-        appwindow->updateCategoriesProperties(appwindow->registry()->categories());
-        if (!controlTab->window->updateFilterProperties(filterText(), filterCaseSensitivity(),
-                                                    filterUsesRegexp(), filterIsInverted(),
-                                                    beforeContext(), afterContext()))
-            controlTab->window->filterNewContent();
+        updateFilterForTab(controlTab);
         enableButtons(controlTab->runControl);
     } else {
         enableDefaultButtons();
@@ -1318,6 +1618,18 @@ bool AppOutputPane::canNavigate() const
 bool AppOutputPane::hasFilterContext() const
 {
     return true;
+}
+
+bool AppOutputPane::supportsLogQueryMode() const
+{
+    if (const RunControlTab *tab = currentTab()) {
+        if (tab->runControl) {
+            // Only show query logs checkbox for Android devices
+            const IDeviceConstPtr device = tab->runControl->device();
+            return device && device->type() == Utils::Id("Android.Device.Type");
+        }
+    }
+    return false;
 }
 
 class AppOutputSettingsWidget : public Core::IOptionsPageWidget

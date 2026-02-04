@@ -181,6 +181,14 @@ public:
     EnableCategoriesFilterAspect(Utils::AspectContainer *container = nullptr);
 };
 
+class PROJECTEXPLORER_EXPORT AppPackageAspect : public Utils::StringAspect
+{
+    Q_OBJECT
+
+public:
+    AppPackageAspect(Utils::AspectContainer *container = nullptr);
+};
+
 class PROJECTEXPLORER_EXPORT ExecutableAspect : public Utils::BaseAspect
 {
     Q_OBJECT

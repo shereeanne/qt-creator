@@ -107,6 +107,9 @@ private:
         AppOutputPaneMode behaviorOnOutput = AppOutputPaneMode::FlashOnOutput;
     };
 
+    void setupAppSpecificFilter();
+    void updateFilterForTab(RunControlTab *tab);
+
     void closeTab(int index, CloseTabMode cm = CloseTabWithPrompt);
     bool optionallyPromptToStop(RunControl *runControl);
 
@@ -133,6 +136,7 @@ private:
     bool canNavigate() const final;
 
     bool hasFilterContext() const final;
+    bool supportsLogQueryMode() const final;
 
     void updateFilter() final;
     const QList<Core::OutputWindow *> outputWindows() const final;

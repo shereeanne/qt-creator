@@ -871,6 +871,14 @@ EnableCategoriesFilterAspect::EnableCategoriesFilterAspect(AspectContainer *cont
             "Output. Requires Qt 6.11 or later."));
 }
 
+AppPackageAspect::AppPackageAspect(AspectContainer *container)
+    : StringAspect(container)
+{
+    setId("AppPackage");
+    setSettingsKey("RunConfiguration.AppPackage");
+    setVisible(false);
+}
+
 Interpreter::Interpreter()
     : id(QUuid::createUuid().toString())
 {}

@@ -41,4 +41,23 @@ protected:
     bool eventFilter(QObject *obj, QEvent *ev) override;
 };
 
+class CORE_EXPORT TextOption
+{
+public:
+    TextOption() noexcept = default;
+    TextOption(const QString &input) noexcept : input{input} {}
+    TextOption(const QString &input, const QStringList &completions, bool multiValue = false) noexcept
+        : input{input}
+        , completions{completions}
+        , multiValue{multiValue}
+    {}
+
+    static std::optional<TextOption> get(QObject *o);
+    static void set(QObject *o, const TextOption &opt);
+
+    QString input;
+    QStringList completions;
+    bool multiValue = false;  // Supports comma-separated values
+};
+
 } // namespace Core

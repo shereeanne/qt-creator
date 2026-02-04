@@ -387,14 +387,9 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             else
                 buffer = lines.takeLast(); // incomplete line
 
-            const QString pidString = QString::number(storagePtr->m_processPID);
             for (const QByteArray &msg : std::as_const(lines)) {
-                const QString line = QString::fromUtf8(msg).trimmed() + QLatin1Char('\n');
-                // Get type excluding the initial color characters
-                const QString msgType = line.mid(5, 2);
-                const bool isFatal = msgType == "F/";
-                if (!line.contains(pidString) && !isFatal)
-                    continue;
+                const QString line = QString::fromUtf8(msg.trimmed()) + QLatin1Char('\n');
+                const QStringView msgType = QStringView(line).mid(5, 2); // Skip color codes
 
                 if (storagePtr->m_useCppDebugger) {
                     if (start->current() == 0 && msg.indexOf("Sending WAIT chunk") > 0)
@@ -403,38 +398,15 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                         settled->advance();
                 }
 
-                static const QRegularExpression regExpLogcat{
-                    "^\\x1B\\[[0-9]+m"   // color
-                    "\\w/"               // message type
-                    ".*"                 // source
-                    "(\\(\\s*\\d*\\)):"  // pid           1. capture
-                    "\\s*"
-                    ".*"                 // message
-                    "\\x1B\\[[0-9]+m"    // color
-                    "[\\n\\r]*$"
-                };
+                const bool isErrorLevel = channel == QProcess::StandardError
+                    || msgType == QLatin1String("W/")
+                    || msgType == QLatin1String("E/")
+                    || msgType == QLatin1String("F/");
 
-                static QStringList errorMsgTypes{"W/", "E/", "F/"};
-                const bool onlyError = channel == QProcess::StandardError;
-                const QRegularExpressionMatch match = regExpLogcat.match(line);
-                if (match.hasMatch()) {
-                    const QString pidMatch = match.captured(1);
-                    const QString cleanPidMatch = pidMatch.mid(1, pidMatch.size() - 2).trimmed();
-                    const QString output = QString(line).remove(pidMatch);
-                    if (isFatal) {
-                        emit storagePtr->appendStdErr(output);
-                    } else if (cleanPidMatch == pidString) {
-                        if (onlyError || errorMsgTypes.contains(msgType))
-                            emit storagePtr->appendStdErr(output);
-                        else
-                            emit storagePtr->appendStdOut(output);
-                    }
-                } else {
-                    if (onlyError || errorMsgTypes.contains(msgType))
-                        emit storagePtr->appendStdErr(line);
-                    else
-                        emit storagePtr->appendStdOut(line);
-                }
+                if (isErrorLevel)
+                    emit storagePtr->appendStdErr(line);
+                else
+                    emit storagePtr->appendStdOut(line);
             }
         };
         QObject::connect(&process, &Process::readyReadStandardOutput, &process, [parseLogcat] {

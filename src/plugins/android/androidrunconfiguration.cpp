@@ -4,6 +4,7 @@
 #include "androidconstants.h"
 #include "androidrunconfiguration.h"
 #include "androidtr.h"
+#include "androidutils.h"
 
 #include <projectexplorer/buildconfiguration.h>
 #include <projectexplorer/buildsystem.h>
@@ -81,6 +82,7 @@ public:
             const BuildTargetInfo bti = buildTargetInfo();
             setDisplayName(bti.displayName);
             setDefaultDisplayName(bti.displayName);
+            appPackage.setValue(packageName(buildConfiguration()));
         });
     }
 
@@ -89,6 +91,7 @@ public:
     StringAspect amStartArgs{this};
     BaseStringListAspect preStartShellCmd{this};
     BaseStringListAspect postStartShellCmd{this};
+    AppPackageAspect appPackage{this};
 };
 
 class AndroidRunConfigurationFactory : public RunConfigurationFactory
