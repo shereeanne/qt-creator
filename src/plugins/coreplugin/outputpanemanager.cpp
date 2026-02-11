@@ -561,6 +561,7 @@ void IOutputPane::setZoomButtonsEnabled(bool enabled)
 
 void IOutputPane::addFilterAction(const Utils::Id &actionId)
 {
+    qDebug() << "Filter action added?";
     m_additionalFilterActions.append(actionId);
 }
 
@@ -625,6 +626,7 @@ Id IOutputPane::filterAfterActionId() const
 
 Id IOutputPane::filterLogQueryModeActionId() const
 {
+    qDebug() << "filterLogQueryModeActionId";
     return Id("OutputFilter.LogQueryMode").withSuffix(m_filterActionSuffix);
 }
 
@@ -642,6 +644,7 @@ void IOutputPane::updatePlaceholder()
         m_filterOutputLineEdit->setSpecialCompleter(nullptr);
     }
 }
+
 
 void IOutputPane::setCaseSensitive(bool caseSensitive)
 {

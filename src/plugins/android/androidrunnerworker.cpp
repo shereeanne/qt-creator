@@ -345,6 +345,7 @@ static ExecutableItem jdbRecipe(const Storage<RunnerStorage> &storage,
     };
 }
 
+static int levelCheckCount = 0;
 static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
 {
     struct Buffer {
@@ -379,6 +380,8 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             const QByteArray &text = channel == QProcess::StandardOutput
                                          ? processPtr->readAllRawStandardOutput()
                                          : processPtr->readAllRawStandardError();
+
+            //most to allocations ??
             QList<QByteArray> lines = text.split('\n');
             // lines always contains at least one item
             lines[0].prepend(buffer);
@@ -387,8 +390,14 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             else
                 buffer = lines.takeLast(); // incomplete line
 
+            QString line;
+            QStringDecoder outputDecoder(QStringConverter::Utf8);
             for (const QByteArray &msg : std::as_const(lines)) {
-                const QString line = QString::fromUtf8(msg.trimmed()) + QLatin1Char('\n');
+                line.resize(outputDecoder.requiredSpace(msg.size() + 1));
+                QChar* end = outputDecoder.appendToBuffer(&line[0], msg);
+                *end = '\n';
+                line.resize(end - line.data() + 1);
+
                 const QStringView msgType = QStringView(line).mid(5, 2); // Skip color codes
 
                 if (storagePtr->m_useCppDebugger) {
@@ -403,6 +412,8 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                     || msgType == QLatin1String("E/")
                     || msgType == QLatin1String("F/");
 
+                levelCheckCount++;
+                qDebug() << "CHECKING ERROR LEVEL:  " << levelCheckCount;
                 if (isErrorLevel)
                     emit storagePtr->appendStdErr(line);
                 else

@@ -221,7 +221,7 @@ public:
             return;
 
         const QStringList parts = parseQueryWithQuotes(query);
-        qCDebug(appOutputLog) << "Parsed query parts:" << parts;
+        qDebug() << "Parsed query parts:" << parts;
 
         for (const QString &part : parts) {
             if (part.startsWith(QLatin1String("Tag:"), Qt::CaseInsensitive)) {
