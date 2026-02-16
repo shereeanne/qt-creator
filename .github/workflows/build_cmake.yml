@@ -263,7 +263,7 @@ jobs:
 
           # Save the path for other steps
           file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qt/" qt_dir)
-          file(APPEND "$ENV{GITHUB_OUTPUT}" "qt_dir=${qt_dir}")
+          file(APPEND "$ENV{GITHUB_OUTPUT}" "qt_dir=${qt_dir}\n")
 
           function(get_sub_url outvar module)
             set(filtered ${sections})
