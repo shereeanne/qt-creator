@@ -345,13 +345,14 @@ static ExecutableItem jdbRecipe(const Storage<RunnerStorage> &storage,
     };
 }
 
-static int levelCheckCount = 0;
 static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
 {
     struct Buffer {
         QStringList timeArgs;
         QByteArray stdOutBuffer;
         QByteArray stdErrBuffer;
+        QString stdOutLines;
+        QString stdErrLines;
     };
 
     const Storage<Buffer> bufferStorage;
@@ -380,8 +381,6 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             const QByteArray &text = channel == QProcess::StandardOutput
                                          ? processPtr->readAllRawStandardOutput()
                                          : processPtr->readAllRawStandardError();
-
-            //most to allocations ??
             QList<QByteArray> lines = text.split('\n');
             // lines always contains at least one item
             lines[0].prepend(buffer);
@@ -390,15 +389,14 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             else
                 buffer = lines.takeLast(); // incomplete line
 
-            QString line;
-            QStringDecoder outputDecoder(QStringConverter::Utf8);
+            const QString pidString = QString::number(storagePtr->m_processPID);
             for (const QByteArray &msg : std::as_const(lines)) {
-                line.resize(outputDecoder.requiredSpace(msg.size() + 1));
-                QChar* end = outputDecoder.appendToBuffer(&line[0], msg);
-                *end = '\n';
-                line.resize(end - line.data() + 1);
-
-                const QStringView msgType = QStringView(line).mid(5, 2); // Skip color codes
+                const QString line = QString::fromUtf8(msg).trimmed() + QLatin1Char('\n');
+                // Get type excluding the initial color characters
+                const QString msgType = line.mid(5, 2);
+                const bool isFatal = msgType == "F/";
+                if (!line.contains(pidString) && !isFatal)
+                    continue;
 
                 if (storagePtr->m_useCppDebugger) {
                     if (start->current() == 0 && msg.indexOf("Sending WAIT chunk") > 0)
@@ -407,17 +405,52 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                         settled->advance();
                 }
 
-                const bool isErrorLevel = channel == QProcess::StandardError
-                    || msgType == QLatin1String("W/")
-                    || msgType == QLatin1String("E/")
-                    || msgType == QLatin1String("F/");
+                static const QRegularExpression regExpLogcat{
+                    "^\\x1B\\[[0-9]+m"   // color
+                    "\\w/"               // message type
+                    ".*"                 // source
+                    "(\\(\\s*\\d*\\)):"  // pid           1. capture
+                    "\\s*"
+                    ".*"                 // message
+                    "\\x1B\\[[0-9]+m"    // color
+                    "[\\n\\r]*$"
+                };
 
-                levelCheckCount++;
-                qDebug() << "CHECKING ERROR LEVEL:  " << levelCheckCount;
-                if (isErrorLevel)
-                    emit storagePtr->appendStdErr(line);
-                else
-                    emit storagePtr->appendStdOut(line);
+                static QStringList errorMsgTypes{"W/", "E/", "F/"};
+                const bool onlyError = channel == QProcess::StandardError;
+                const QRegularExpressionMatch match = regExpLogcat.match(line);
+                if (match.hasMatch()) {
+                    const QString pidMatch = match.captured(1);
+                    const QString cleanPidMatch = pidMatch.mid(1, pidMatch.size() - 2).trimmed();
+                    const QString output = QString(line).remove(pidMatch);
+                    if (isFatal) {
+                        // emit storagePtr->appendStdErr(output);
+                        bufferPtr->stdErrLines += output;
+                    } else if (cleanPidMatch == pidString) {
+                        if (onlyError || errorMsgTypes.contains(msgType))
+                            // emit storagePtr->appendStdErr(output);
+                            bufferPtr->stdErrLines += output;
+                        else
+                            // emit storagePtr->appendStdOut(output);
+                            bufferPtr->stdOutLines += output;
+                    }
+                } else {
+                    if (onlyError || errorMsgTypes.contains(msgType))
+                        // emit storagePtr->appendStdErr(line);
+                        bufferPtr->stdErrLines += line;
+                    else
+                        // emit storagePtr->appendStdOut(line);
+                        bufferPtr->stdOutLines += line;
+                }
+            }
+
+            if (!bufferPtr->stdOutLines.isEmpty()) {
+                emit storagePtr->appendStdOut(bufferPtr->stdOutLines);
+                bufferPtr->stdOutLines.clear();
+            }
+            if (!bufferPtr->stdErrLines.isEmpty()) {
+                emit storagePtr->appendStdErr(bufferPtr->stdErrLines);
+                bufferPtr->stdErrLines.clear();
             }
         };
         QObject::connect(&process, &Process::readyReadStandardOutput, &process, [parseLogcat] {
