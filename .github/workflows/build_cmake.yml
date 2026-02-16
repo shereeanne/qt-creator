@@ -236,7 +236,12 @@ jobs:
           set(compiler_id "clang_64")
         endif()
 
+        # Save the path for other steps (set before loop since it's constant)
+        file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qt" qt_dir)
+        file(APPEND "$ENV{GITHUB_OUTPUT}" "qt_dir=${qt_dir}\n")
+
         set(qt_base_url "https://\${qt_mirror}/online/qtsdkrepository/${url_os}/desktop/qt6_${qt_version_dotless}/qt6_${qt_version_dotless}")
+        set(qt_downloaded FALSE)
         foreach(qt_mirror $ENV{QT_MIRRORS})
           foreach(retry RANGE 10)
             cmake_language(EVAL CODE "
@@ -260,10 +265,6 @@ jobs:
           string(REGEX REPLACE "<PackageUpdate>" ";<PackageUpdate>" sections "${updates_xml}")
           list(FILTER sections EXCLUDE REGEX "<Name>.*debug.*</Name>")
           list(FILTER sections INCLUDE REGEX "<Name>.*${compiler_id}.*</Name>")
-
-          # Save the path for other steps
-          file(TO_CMAKE_PATH "$ENV{GITHUB_WORKSPACE}/qt/" qt_dir)
-          file(APPEND "$ENV{GITHUB_OUTPUT}" "qt_dir=${qt_dir}\n")
 
           function(get_sub_url outvar module)
             set(filtered ${sections})
@@ -313,8 +314,13 @@ jobs:
           endif()
 
           # Work is done, no need to try the next mirror.
+          set(qt_downloaded TRUE)
           break()
         endforeach()
+
+        if (NOT qt_downloaded)
+          message(FATAL_ERROR "Failed to download Qt from any mirror")
+        endif()
 
         execute_process(COMMAND ${qt_dir}/bin/qmake -query)
 
