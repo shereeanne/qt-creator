@@ -245,8 +245,8 @@ jobs:
         foreach(qt_mirror $ENV{QT_MIRRORS})
           foreach(retry RANGE 10)
             cmake_language(EVAL CODE "
-              message(\"Downloading \${qt_base_url}/Updates.xml\")
-              file(DOWNLOAD \"\${qt_base_url}/Updates.xml\" ./Updates.xml)
+              message(\"Downloading ${qt_base_url}/Updates.xml\")
+              file(DOWNLOAD \"${qt_base_url}/Updates.xml\" ./Updates.xml)
             ")
             file(SIZE ./Updates.xml fileSize)
             if (fileSize GREATER 0)
@@ -292,8 +292,8 @@ jobs:
             set(url "${qt_base_url}/${sub_url}")
             foreach(retry RANGE 10)
               cmake_language(EVAL CODE "
-                message(\"Downloading ${module} from \${url}\")
-                file(DOWNLOAD \"\${url}\" \"$ENV{GITHUB_WORKSPACE}/${archive}\" SHOW_PROGRESS)
+                message(\"Downloading ${module} from ${url}\")
+                file(DOWNLOAD \"${url}\" \"$ENV{GITHUB_WORKSPACE}/${archive}\" SHOW_PROGRESS)
               ")
               file(SIZE "$ENV{GITHUB_WORKSPACE}/${archive}" fileSize)
               if (fileSize GREATER 0)
@@ -353,8 +353,8 @@ jobs:
         foreach(qt_mirror $ENV{QT_MIRRORS})
           foreach(retry RANGE 10)
             cmake_language(EVAL CODE "
-              message(\"Downloading \${openssl_base_url}/Updates.xml\")
-              file(DOWNLOAD \"\${openssl_base_url}/Updates.xml\" ./Updates.xml SHOW_PROGRESS)
+              message(\"Downloading ${openssl_base_url}/Updates.xml\")
+              file(DOWNLOAD \"${openssl_base_url}/Updates.xml\" ./Updates.xml SHOW_PROGRESS)
             ")
             file(SIZE ./Updates.xml fileSize)
             if (fileSize GREATER 0)
@@ -385,8 +385,8 @@ jobs:
         foreach(qt_mirror $ENV{QT_MIRRORS})
           foreach(retry RANGE 10)
             cmake_language(EVAL CODE "
-              message(\"Downloading \${url}\")
-              file(DOWNLOAD \"\${url}\" ./openssl.7z)
+              message(\"Downloading ${url}\")
+              file(DOWNLOAD \"${url}\" ./openssl.7z)
             ")
             file(SIZE ./openssl.7z fileSize)
             if (fileSize GREATER 0)
@@ -424,8 +424,8 @@ jobs:
         foreach(qt_mirror $ENV{QT_MIRRORS})
           foreach(retry RANGE 10)
             cmake_language(EVAL CODE "
-              message(\"Downloading \${libclang_url}\")
-              file(DOWNLOAD \"\${libclang_url}\" ./libclang.7z)
+              message(\"Downloading ${libclang_url}\")
+              file(DOWNLOAD \"${libclang_url}\" ./libclang.7z)
             ")
             file(SIZE ./libclang.7z fileSize)
             if (fileSize GREATER 0)
@@ -468,8 +468,8 @@ jobs:
 
         foreach(qt_mirror $ENV{QT_MIRRORS})
           cmake_language(EVAL CODE "
-            message(\"Downloading \${elfutils_url}\")
-            file(DOWNLOAD \"\${elfutils_url}\" ./elfutils.7z)
+            message(\"Downloading ${elfutils_url}\")
+            file(DOWNLOAD \"${elfutils_url}\" ./elfutils.7z)
           ")
           file(SIZE ./elfutils.7z fileSize)
           if (fileSize GREATER 0)
