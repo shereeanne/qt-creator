@@ -11,6 +11,7 @@
 #include <utils/theme/theme.h>
 
 #include <QPointer>
+#include <QTimer>
 
 QT_BEGIN_NAMESPACE
 class QToolButton;
@@ -138,6 +139,7 @@ private:
     bool hasFilterContext() const final;
     bool supportsLogQueryMode() const final;
 
+    void filterContent();
     void updateFilter() final;
     const QList<Core::OutputWindow *> outputWindows() const final;
     void ensureWindowVisible(Core::OutputWindow *ow) final;
@@ -158,6 +160,9 @@ private:
     QWidget *m_formatterWidget;
     ShowOutputTaskHandler * const m_handler;
     AppOutputSettings m_settings;
+
+    QTimer *m_filterTimer = nullptr;
+
 };
 
 class AppOutputSettingsPage final : public Core::IOptionsPage

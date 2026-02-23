@@ -795,6 +795,13 @@ AppOutputPane::AppOutputPane() :
     setupAppSpecificFilter();
 
     setFilteringEnabled(false);
+
+    m_filterTimer = new QTimer(this);
+    m_filterTimer->setSingleShot(true);
+    m_filterTimer->setInterval(10);
+
+    connect(m_filterTimer, &QTimer::timeout, this, &AppOutputPane::filterContent);
+
     setZoomButtonsEnabled(false);
     setupContext("Core.AppOutputPane", m_tabWidget);
 }
@@ -943,9 +950,15 @@ void AppOutputPane::updateFilterForTab(RunControlTab *tab)
     appwindow->invalidateFilter();
 }
 
-void AppOutputPane::updateFilter()
+void AppOutputPane::filterContent()
 {
     updateFilterForTab(currentTab());
+}
+
+void AppOutputPane::updateFilter()
+{
+    if (m_filterTimer)
+        m_filterTimer->start(150);
 }
 
 const QList<Core::OutputWindow *> AppOutputPane::outputWindows() const

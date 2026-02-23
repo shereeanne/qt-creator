@@ -161,6 +161,10 @@ public:
     Utils::Environment m_extraEnvVars;
     Utils::FilePath m_debugServerPath; // On build device, typically as part of ndk
     bool m_useAppParamsForQmlDebugger = false;
+
+    QStringList m_logcatTimeArgs;
+    QString m_logcatFilteredOut;
+    QString m_logcatFilteredErr;
 };
 
 static void setupStorage(RunnerStorage *storage, RunnerInterface *glue)
@@ -345,54 +349,60 @@ static ExecutableItem jdbRecipe(const Storage<RunnerStorage> &storage,
     };
 }
 
+static void splitByteArrayView(QByteArrayView data, char delim, QList<QByteArrayView> *result)
+{
+    result->clear();
+    qsizetype start = 0;
+    for (qsizetype i = 0; i < data.size(); ++i) {
+        if (data[i] == delim) {
+            result->append(data.sliced(start, i - start));
+            start = i + 1;
+        }
+    }
+    result->append(data.sliced(start));
+}
+
+
 static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
 {
-    struct Buffer {
-        QStringList timeArgs;
-        QByteArray stdOutBuffer;
-        QByteArray stdErrBuffer;
-        QString stdOutLines;
-        QString stdErrLines;
-    };
-
-    const Storage<Buffer> bufferStorage;
     const QStoredBarrier startJdbBarrier;   // When logcat received "Sending WAIT chunk".
     const QStoredBarrier settledJdbBarrier; // When logcat received "debugger has settled".
 
     const auto onTimeSetup = [storage](Process &process) {
         process.setCommand(storage->adbCommand({"shell", "date", "+%s"}));
     };
-    const auto onTimeDone = [bufferStorage](const Process &process) {
-        bufferStorage->timeArgs = {"-T", QDateTime::fromSecsSinceEpoch(
+    const auto onTimeDone = [storage](const Process &process) {
+        storage->m_logcatTimeArgs = {"-T", QDateTime::fromSecsSinceEpoch(
             process.cleanedStdOut().trimmed().toInt()).toString("MM-dd hh:mm:ss.mmm")};
     };
 
-    const auto onLogcatSetup = [storage, bufferStorage, startJdbBarrier, settledJdbBarrier](Process &process) {
+    const auto onLogcatSetup = [storage, startJdbBarrier, settledJdbBarrier](Process &process) {
         RunnerStorage *storagePtr = storage.activeStorage();
-        Buffer *bufferPtr = bufferStorage.activeStorage();
-        const auto parseLogcat = [storagePtr, bufferPtr, start = startJdbBarrier.activeStorage(),
+        const auto parseLogcat = [storagePtr, start = startJdbBarrier.activeStorage(),
                                   settled = settledJdbBarrier.activeStorage(), processPtr = &process](
                                      QProcess::ProcessChannel channel) {
             if (storagePtr->m_processPID == -1)
                 return;
 
-            QByteArray &buffer = channel == QProcess::StandardOutput ? bufferPtr->stdOutBuffer
-                                                                     : bufferPtr->stdErrBuffer;
             const QByteArray &text = channel == QProcess::StandardOutput
                                          ? processPtr->readAllRawStandardOutput()
                                          : processPtr->readAllRawStandardError();
-            QList<QByteArray> lines = text.split('\n');
-            // lines always contains at least one item
-            lines[0].prepend(buffer);
-            if (lines.last().endsWith('\n'))
-                buffer.clear();
-            else
-                buffer = lines.takeLast(); // incomplete line
+            static QList<QByteArrayView> lines;
+            splitByteArrayView(text, '\n', &lines);
 
-            for (const QByteArray &msg : std::as_const(lines)) {
-                const QString line = QString::fromUtf8(msg).trimmed() + QLatin1Char('\n');
+            static QString convertedOutput;
+
+            QStringDecoder outputDecoder(QStringConverter::Utf8);
+            for (const QByteArrayView &msg : std::as_const(lines)) {
+                if (msg.isEmpty())
+                    continue;
+                convertedOutput.resize(outputDecoder.requiredSpace(msg.size() + 1));
+                QChar* end = outputDecoder.appendToBuffer(&convertedOutput[0], msg);
+                *end = '\n';
+                convertedOutput.resize(end - convertedOutput.data() + 1);
+
                 // Get type excluding the initial color characters
-                const QString msgType = line.mid(5, 2);
+                const QString msgType = convertedOutput.mid(5, 2);
 
                 if (storagePtr->m_useCppDebugger) {
                     if (start->current() == 0 && msg.indexOf("Sending WAIT chunk") > 0)
@@ -404,18 +414,18 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
                 static QStringList errorMsgTypes{"W/", "E/", "F/"};
                 const bool onlyError = channel == QProcess::StandardError;
                 if (onlyError || errorMsgTypes.contains(msgType))
-                    bufferPtr->stdErrLines += line;
+                    storagePtr->m_logcatFilteredErr += convertedOutput;
                 else
-                    bufferPtr->stdOutLines += line;
+                    storagePtr->m_logcatFilteredOut += convertedOutput;
             }
 
-            if (!bufferPtr->stdOutLines.isEmpty()) {
-                emit storagePtr->appendStdOut(bufferPtr->stdOutLines);
-                bufferPtr->stdOutLines.clear();
+            if (!storagePtr->m_logcatFilteredOut.isEmpty()) {
+                emit storagePtr->appendStdOut(storagePtr->m_logcatFilteredOut);
+                storagePtr->m_logcatFilteredOut.clear();
             }
-            if (!bufferPtr->stdErrLines.isEmpty()) {
-                emit storagePtr->appendStdErr(bufferPtr->stdErrLines);
-                bufferPtr->stdErrLines.clear();
+            if (!storagePtr->m_logcatFilteredErr.isEmpty()) {
+                emit storagePtr->appendStdErr(storagePtr->m_logcatFilteredErr);
+                storagePtr->m_logcatFilteredErr.clear();
             }
         };
         QObject::connect(&process, &Process::readyReadStandardOutput, &process, [parseLogcat] {
@@ -425,7 +435,7 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
             parseLogcat(QProcess::StandardError);
         });
         process.setCommand(storage->adbCommand({"logcat", "-v", "color", "-v", "brief",
-                                                bufferStorage->timeArgs}));
+                                                storage->m_logcatTimeArgs}));
     };
 
     return Group {
@@ -433,7 +443,6 @@ static ExecutableItem logcatRecipe(const Storage<RunnerStorage> &storage)
         startJdbBarrier,
         settledJdbBarrier,
         Group {
-            bufferStorage,
             ProcessTask(onTimeSetup, onTimeDone, CallDone::OnSuccess) || successItem,
             ProcessTask(onLogcatSetup)
         },
